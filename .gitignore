@@ -1,0 +1,14 @@
+# ไฟล์รหัสผ่านและความลับ
+*.json
+credentials.json
+
+# โฟลเดอร์บิลด์
+build/
+dist/
+*.spec
+
+# ไฟล์ขยะ Python
+__pycache__/
+*.py[cod]
+venv/
+.env
