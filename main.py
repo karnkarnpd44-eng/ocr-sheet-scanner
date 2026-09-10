@@ -1,44 +1,48 @@
-import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox, filedialog
-import cv2
+import datetime
+import ipaddress
+import os
+import re
+import socket
 import threading
 import time
-import datetime
+import tkinter as tk
+from tkinter import filedialog, messagebox, scrolledtext, ttk
+import cv2
+import numpy as np
 from PIL import Image, ImageTk
 import pytesseract
-import numpy as np
-import socket
-import ipaddress
-import re
-import os
 
 # Google Sheet
 try:
     import gspread
     from oauth2client.service_account import ServiceAccountCredentials
+
     GSHEET_AVAILABLE = True
 except ImportError:
     GSHEET_AVAILABLE = False
 
 if os.path.exists("Tesseract-OCR/tesseract.exe"):
-    pytesseract.pytesseract.tesseract_cmd = os.path.abspath("Tesseract-OCR/tesseract.exe")
+    pytesseract.pytesseract.tesseract_cmd = os.path.abspath(
+        "Tesseract-OCR/tesseract.exe"
+    )
 else:
-    pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    pytesseract.pytesseract.tesseract_cmd = (
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    )
 
 RTSP_PATHS = [
-    "/tcp/av0_0",                           # TONG BO WEI (ตัวเดิมที่คุณใช้)
-    "/live/ch0",                            # Guangzhou Juan / EseeCloud
-    "/onvif1",                              # Onvif / iComm Semiconductor
-    "/onvif2",                              # Onvif สำรอง
-    "/stream1",                             # Tapo / ทั่วไป
-    "/cam/realmonitor?channel=1&subtype=0", # Dahua / IMOU
-    "/h264/ch1/main/av_stream",             # Hikvision
+    "/tcp/av0_0",  # TONG BO WEI
+    "/live/ch0",  # Guangzhou Juan / EseeCloud
+    "/onvif1",  # Onvif / iComm Semiconductor
+    "/onvif2",  # Onvif สำรอง
+    "/stream1",  # Tapo / ทั่วไป
+    "/cam/realmonitor?channel=1&subtype=0",  # Dahua / IMOU
+    "/h264/ch1/main/av_stream",  # Hikvision
     "/live",
-    "",                                     # เผื่อกล้องที่ไม่ต้องมี path
+    "",
 ]
 HTTP_PATHS = ["/video", "/mjpeg", "/stream", "/?action=stream"]
 
-# เพิ่มพอร์ต 10554 เข้าไป และเอาพอร์ตที่พบบ่อยขึ้นก่อน
 COMMON_PORTS = [554, 10554, 8554, 8080, 80, 8081, 1935]
 SHEET_NAME = "VSearch4.0"
 
@@ -51,15 +55,16 @@ STATUS_OPTIONS = [
 ]
 
 STATUS_COLORS = {
-    "ปักเสร็จแล้ว":     {"red": 0.0,  "green": 0.8, "blue": 0.0},
-    "รอเย็บชุดลูกเสือ": {"red": 1.0,  "green": 0.6, "blue": 0.0},
-    "รอปักดาว/จุด":     {"red": 1.0,  "green": 0.95, "blue": 0.0},
-    "ลูกค้ารับแล้ว":     {"red": 1.0,  "green": 0.95, "blue": 0.0},
-    "_custom":          {"red": 0.53, "green": 0.81, "blue": 0.98},
+    "ปักเสร็จแล้ว": {"red": 0.0, "green": 0.8, "blue": 0.0},
+    "รอเย็บชุดลูกเสือ": {"red": 1.0, "green": 0.6, "blue": 0.0},
+    "รอปักดาว/จุด": {"red": 1.0, "green": 0.95, "blue": 0.0},
+    "ลูกค้ารับแล้ว": {"red": 1.0, "green": 0.95, "blue": 0.0},
+    "_custom": {"red": 0.53, "green": 0.81, "blue": 0.98},
 }
 
 
 class GoogleSheetManager:
+
     def __init__(self):
         self.client = None
         self.sheet = None
@@ -68,18 +73,26 @@ class GoogleSheetManager:
 
     def connect(self, cred_path="credentials.json"):
         if not GSHEET_AVAILABLE:
-            return False, "ไม่พบ gspread ติดตั้งด้วย: pip install gspread oauth2client"
+            return (
+                False,
+                "ไม่พบ gspread ติดตั้งด้วย: pip install gspread oauth2client",
+            )
         try:
             scopes = [
                 "https://spreadsheets.google.com/feeds",
-                "https://www.googleapis.com/auth/drive"
+                "https://www.googleapis.com/auth/drive",
             ]
-            creds = ServiceAccountCredentials.from_json_keyfile_name(cred_path, scopes)
+            creds = ServiceAccountCredentials.from_json_keyfile_name(
+                cred_path, scopes
+            )
             self.client = gspread.authorize(creds)
             self.sheet = self.client.open(SHEET_NAME).sheet1
             self.connected = True
             self._refresh_cache()
-            return True, f"เชื่อมต่อ '{SHEET_NAME}' สำเร็จ (พบ {len(self._cache)} รหัส)"
+            return (
+                True,
+                f"เชื่อมต่อ '{SHEET_NAME}' สำเร็จ (พบ {len(self._cache)} รหัส)",
+            )
         except FileNotFoundError:
             return False, "ไม่พบไฟล์ credentials.json"
         except Exception as e:
@@ -110,7 +123,9 @@ class GoogleSheetManager:
             return True, self._cache[code][0], self._cache[code][1]
         return False, -1, "ไม่พบรหัสนี้ใน Sheet"
 
-    def update_status(self, row_index, new_status, color=None, timestamp="", source=""):
+    def update_status(
+        self, row_index, new_status, color=None, timestamp="", source=""
+    ):
         if not self.connected:
             return False, "ยังไม่ได้เชื่อมต่อ Sheet"
         try:
@@ -119,17 +134,20 @@ class GoogleSheetManager:
                 self.sheet.update_cell(row_index, 7, timestamp)
             if source:
                 self.sheet.update_cell(row_index, 5, source)
-            base = re.sub(r'\s*\((Auto|Manual)\)\s*$', '', new_status).strip()
+            base = re.sub(r"\s*\((Auto|Manual)\)\s*$", "", new_status).strip()
             if base == "ลูกค้ารับแล้ว" and timestamp:
                 self.sheet.update_cell(row_index, 8, timestamp)
             bg = color if color else {"red": 0.0, "green": 0.8, "blue": 0.0}
-            self.sheet.format(f"A{row_index}:B{row_index}", {"backgroundColor": bg})
+            self.sheet.format(
+                f"A{row_index}:B{row_index}", {"backgroundColor": bg}
+            )
             return True, f"อัปเดตแถว {row_index} → '{new_status}' แล้ว"
         except Exception as e:
             return False, str(e)
 
 
 class OCRScannerApp:
+
     def __init__(self, root):
         self.root = root
         self.root.title("OCR Document Scanner + Google Sheet")
@@ -155,7 +173,6 @@ class OCRScannerApp:
         self.zoom_offset_y = 0.5
         self.pan_start = None
 
-        # Undo stack & status indicator state
         self._undo_stack = []
         self._blink_job = None
         self._indicator_state = "idle"
@@ -173,7 +190,9 @@ class OCRScannerApp:
                 self.auto_interval = 5
             self._auto_event = threading.Event()
             threading.Thread(target=self._auto_loop, daemon=True).start()
-            self.status.config(text=f"จับภาพอัตโนมัติทุก {self.auto_interval} วินาที")
+            self.status.config(
+                text=f"จับภาพอัตโนมัติทุก {self.auto_interval} วินาที"
+            )
 
     def _auto_loop(self):
         while self.auto_capture and self.is_streaming:
@@ -183,7 +202,7 @@ class OCRScannerApp:
                 threading.Thread(
                     target=self._do_ocr,
                     args=(self.current_frame.copy(),),
-                    daemon=True
+                    daemon=True,
                 ).start()
 
     # ─────────────────────────── UI ───────────────────────────
@@ -193,8 +212,10 @@ class OCRScannerApp:
 
         tk.Label(top, text="แหล่งกล้อง:").pack(side="left")
         self.source_type = ttk.Combobox(
-            top, values=["Webcam", "IP Camera (LAN)", "URL โดยตรง"],
-            width=18, state="readonly"
+            top,
+            values=["Webcam", "IP Camera (LAN)", "URL โดยตรง"],
+            width=18,
+            state="readonly",
         )
         self.source_type.current(0)
         self.source_type.pack(side="left", padx=4)
@@ -202,10 +223,17 @@ class OCRScannerApp:
 
         self.url_frame = tk.Frame(top)
         self.url_entry = tk.Entry(self.url_frame, width=42)
-        self.url_entry.insert(0, "rtsp://admin:Sitthik0rn@192.168.1.111:10554/tcp/av0_0")
+        self.url_entry.insert(
+            0, "rtsp://admin:Sitthik0rn@192.168.1.111:10554/tcp/av0_0"
+        )
         self.url_entry.pack(side="left")
-        tk.Button(self.url_frame, text="🔗 เชื่อมต่อ", bg="#0078d4", fg="white",
-                  command=self.start_stream).pack(side="left", padx=2)
+        tk.Button(
+            self.url_frame,
+            text="🔗 เชื่อมต่อ",
+            bg="#0078d4",
+            fg="white",
+            command=self.start_stream,
+        ).pack(side="left", padx=2)
 
         for text, color, cmd in [
             ("▶ เริ่ม", "green", self.start_stream),
@@ -216,16 +244,22 @@ class OCRScannerApp:
             ("🗑 ล้าง", "#888", self.clear_result),
             ("🔄 รีโหลด", "#8B4513", self.reload_app),
         ]:
-            tk.Button(top, text=text, bg=color, fg="white", command=cmd).pack(side="left", padx=2)
+            tk.Button(top, text=text, bg=color, fg="white", command=cmd).pack(
+                side="left", padx=2
+            )
 
         # Row 2: webcam
         self.row_webcam = tk.Frame(self.root, pady=2)
         self.row_webcam.pack(fill="x", padx=10)
         tk.Label(self.row_webcam, text="เลือกกล้อง:").pack(side="left")
-        self.camera_combo = ttk.Combobox(self.row_webcam, values=[], width=28, state="readonly")
+        self.camera_combo = ttk.Combobox(
+            self.row_webcam, values=[], width=28, state="readonly"
+        )
         self.camera_combo.pack(side="left", padx=4)
         self.camera_combo.bind("<<ComboboxSelected>>", self._on_camera_select)
-        tk.Button(self.row_webcam, text="🔍 ค้นหากล้อง", command=self._scan_cameras).pack(side="left", padx=4)
+        tk.Button(
+            self.row_webcam, text="🔍 ค้นหากล้อง", command=self._scan_cameras
+        ).pack(side="left", padx=4)
 
         # Row 3: IP scanner
         self.row_ip = tk.Frame(self.root, pady=2)
@@ -241,11 +275,18 @@ class OCRScannerApp:
         self.cam_pass = tk.Entry(self.row_ip, width=8, show="*")
         self.cam_pass.insert(0, "admin")
         self.cam_pass.pack(side="left", padx=2)
-        tk.Button(self.row_ip, text="🌐 สแกน LAN", bg="#7b2d8b", fg="white",
-                  command=self._scan_ip_cameras).pack(side="left", padx=4)
+        tk.Button(
+            self.row_ip,
+            text="🌐 สแกน LAN",
+            bg="#7b2d8b",
+            fg="white",
+            command=self._scan_ip_cameras,
+        ).pack(side="left", padx=4)
         self.scan_progress = tk.Label(self.row_ip, text="", fg="#0078d4")
         self.scan_progress.pack(side="left", padx=4)
-        self.ip_cam_combo = ttk.Combobox(self.row_ip, values=[], width=48, state="readonly")
+        self.ip_cam_combo = ttk.Combobox(
+            self.row_ip, values=[], width=48, state="readonly"
+        )
         self.ip_cam_combo.pack(side="left", padx=4)
         self.ip_cam_combo.bind("<<ComboboxSelected>>", self._on_ip_cam_select)
 
@@ -254,90 +295,173 @@ class OCRScannerApp:
         ctrl.pack(fill="x", padx=10)
 
         self.auto_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(ctrl, text="จับภาพอัตโนมัติ", variable=self.auto_var,
-                       command=self._toggle_auto, bg="#f0f0f0").pack(side="left")
+        tk.Checkbutton(
+            ctrl,
+            text="จับภาพอัตโนมัติ",
+            variable=self.auto_var,
+            command=self._toggle_auto,
+            bg="#f0f0f0",
+        ).pack(side="left")
         tk.Label(ctrl, text="ทุก", bg="#f0f0f0").pack(side="left", padx=(6, 2))
         self.interval_var = tk.StringVar(value="5")
-        tk.Spinbox(ctrl, from_=1, to=60, width=4,
-                   textvariable=self.interval_var).pack(side="left")
-        tk.Label(ctrl, text="วินาที  |", bg="#f0f0f0").pack(side="left", padx=(2, 8))
-        tk.Label(ctrl, text="🔲 ลากกรอบ crop |", fg="#555",
-                 bg="#f0f0f0", font=("Segoe UI", 9, "italic")).pack(side="left")
-        tk.Button(ctrl, text="รีเซ็ต crop", command=self._reset_crop).pack(side="left", padx=4)
-        tk.Label(ctrl, text="  🔍 ซูม:", bg="#f0f0f0").pack(side="left", padx=(8, 2))
-        tk.Button(ctrl, text="➕", width=3, command=self._zoom_in, bg="#ddd").pack(side="left", padx=1)
-        self.zoom_label = tk.Label(ctrl, text="1.0x", width=5, bg="#f0f0f0",
-                                   font=("Segoe UI", 9, "bold"))
+        tk.Spinbox(
+            ctrl, from_=1, to=60, width=4, textvariable=self.interval_var
+        ).pack(side="left")
+        tk.Label(ctrl, text="วินาที  |", bg="#f0f0f0").pack(
+            side="left", padx=(2, 8)
+        )
+        tk.Label(
+            ctrl,
+            text="🔲 ลากกรอบ crop |",
+            fg="#555",
+            bg="#f0f0f0",
+            font=("Segoe UI", 9, "italic"),
+        ).pack(side="left")
+        tk.Button(ctrl, text="รีเซ็ต crop", command=self._reset_crop).pack(
+            side="left", padx=4
+        )
+        tk.Label(ctrl, text="  🔍 ซูม:", bg="#f0f0f0").pack(
+            side="left", padx=(8, 2)
+        )
+        tk.Button(
+            ctrl, text="➕", width=3, command=self._zoom_in, bg="#ddd"
+        ).pack(side="left", padx=1)
+        self.zoom_label = tk.Label(
+            ctrl,
+            text="1.0x",
+            width=5,
+            bg="#f0f0f0",
+            font=("Segoe UI", 9, "bold"),
+        )
         self.zoom_label.pack(side="left")
-        tk.Button(ctrl, text="➖", width=3, command=self._zoom_out, bg="#ddd").pack(side="left", padx=1)
-        tk.Button(ctrl, text="รีเซ็ต", command=self._zoom_reset, bg="#ddd").pack(side="left", padx=4)
-        tk.Label(ctrl, text="| Ctrl+ลาก = เลื่อนภาพ",
-                 fg="#888", bg="#f0f0f0", font=("Segoe UI", 8, "italic")).pack(side="left")
+        tk.Button(
+            ctrl, text="➖", width=3, command=self._zoom_out, bg="#ddd"
+        ).pack(side="left", padx=1)
+        tk.Button(ctrl, text="รีเซ็ต", command=self._zoom_reset, bg="#ddd").pack(
+            side="left", padx=4
+        )
+        tk.Label(
+            ctrl,
+            text="| Ctrl+ลาก = เลื่อนภาพ",
+            fg="#888",
+            bg="#f0f0f0",
+            font=("Segoe UI", 8, "italic"),
+        ).pack(side="left")
 
         # Row 5: Google Sheet
         gs_frame = tk.Frame(self.root, pady=3, bg="#e8f4e8")
         gs_frame.pack(fill="x", padx=10)
-        tk.Label(gs_frame, text="🟢 Google Sheet:", font=("Segoe UI", 9, "bold"),
-                 bg="#e8f4e8").pack(side="left")
-        tk.Label(gs_frame, text="credentials.json:", bg="#e8f4e8").pack(side="left", padx=(8, 2))
+        tk.Label(
+            gs_frame,
+            text="🟢 Google Sheet:",
+            font=("Segoe UI", 9, "bold"),
+            bg="#e8f4e8",
+        ).pack(side="left")
+        tk.Label(gs_frame, text="credentials.json:", bg="#e8f4e8").pack(
+            side="left", padx=(8, 2)
+        )
         self.cred_path = tk.Entry(gs_frame, width=24)
         self.cred_path.insert(0, "credentials.json")
         self.cred_path.pack(side="left", padx=2)
-        tk.Button(gs_frame, text="📁", command=self._browse_cred).pack(side="left")
-        tk.Button(gs_frame, text="🔌 เชื่อมต่อ Sheet", bg="#1a7340", fg="white",
-                  command=self._connect_sheet).pack(side="left", padx=6)
-        tk.Label(gs_frame, text="สถานะที่จะอัปเดต:", bg="#e8f4e8",
-                 font=("Segoe UI", 9, "bold")).pack(side="left")
+        tk.Button(gs_frame, text="📁", command=self._browse_cred).pack(
+            side="left"
+        )
+        tk.Button(
+            gs_frame,
+            text="🔌 เชื่อมต่อ Sheet",
+            bg="#1a7340",
+            fg="white",
+            command=self._connect_sheet,
+        ).pack(side="left", padx=6)
+        tk.Label(
+            gs_frame,
+            text="สถานะที่จะอัปเดต:",
+            bg="#e8f4e8",
+            font=("Segoe UI", 9, "bold"),
+        ).pack(side="left", padx=(8, 2))
         self.status_var = tk.StringVar(value=STATUS_OPTIONS[0])
         self.status_combo = ttk.Combobox(
-            gs_frame, textvariable=self.status_var,
-            values=STATUS_OPTIONS, width=22, state="readonly"
+            gs_frame,
+            textvariable=self.status_var,
+            values=STATUS_OPTIONS,
+            width=22,
+            state="readonly",
         )
         self.status_combo.pack(side="left", padx=4)
         self.status_combo.bind("<<ComboboxSelected>>", self._on_status_select)
         self.custom_status_entry = tk.Entry(gs_frame, width=22, fg="#555")
         self.custom_status_entry.insert(0, "พิมพ์สถานะที่ต้องการ...")
-        self.gs_status = tk.Label(gs_frame, text="ยังไม่ได้เชื่อมต่อ",
-                                  fg="gray", bg="#e8f4e8", font=("Segoe UI", 9))
+        self.gs_status = tk.Label(
+            gs_frame,
+            text="ยังไม่ได้เชื่อมต่อ",
+            fg="gray",
+            bg="#e8f4e8",
+            font=("Segoe UI", 9),
+        )
         self.gs_status.pack(side="left", padx=6)
 
         # Row 6: Manual code entry + Indicator + Undo
-        manual_frame = tk.Frame(self.root, pady=4, bg="#eef4ff", relief="groove", bd=1)
+        manual_frame = tk.Frame(
+            self.root, pady=4, bg="#eef4ff", relief="groove", bd=1
+        )
         manual_frame.pack(fill="x", padx=10, pady=(0, 0))
 
-        tk.Label(manual_frame, text="✏️ ป้อนรหัส 4 หลัก:", font=("Segoe UI", 9, "bold"),
-                 bg="#eef4ff").pack(side="left", padx=(8, 4))
-
-        self.manual_code_entry = tk.Entry(manual_frame, width=10,
-                                          font=("Segoe UI", 11, "bold"), justify="center")
+        tk.Label(
+            manual_frame,
+            text="✏️ ป้อนรหัส 1-4 หลัก:",
+            font=("Segoe UI", 9, "bold"),
+            bg="#eef4ff",
+        ).pack(side="left", padx=(8, 4))
+        self.manual_code_entry = tk.Entry(
+            manual_frame,
+            width=10,
+            font=("Segoe UI", 11, "bold"),
+            justify="center",
+        )
         self.manual_code_entry.pack(side="left", padx=4)
         self.manual_code_entry.bind("<Return>", self._on_manual_code_enter)
         self.manual_code_entry.bind("<KeyRelease>", self._limit_manual_entry)
 
-        tk.Button(manual_frame, text="✅ อัปเดต", bg="#1a7340", fg="white",
-                  font=("Segoe UI", 9, "bold"),
-                  command=self._on_manual_code_enter).pack(side="left", padx=4)
+        tk.Button(
+            manual_frame,
+            text="✅ อัปเดต",
+            bg="#1a7340",
+            fg="white",
+            font=("Segoe UI", 9, "bold"),
+            command=self._on_manual_code_enter,
+        ).pack(side="left", padx=4)
+        tk.Label(manual_frame, text="|", bg="#eef4ff", fg="#aaa").pack(
+            side="left", padx=6
+        )
 
-        tk.Label(manual_frame, text="|", bg="#eef4ff", fg="#aaa").pack(side="left", padx=6)
-
-        # Status indicator canvas (circle)
-        self.indicator_canvas = tk.Canvas(manual_frame, width=32, height=32,
-                                          bg="#eef4ff", highlightthickness=0)
+        # Status indicator canvas
+        self.indicator_canvas = tk.Canvas(
+            manual_frame, width=32, height=32, bg="#eef4ff", highlightthickness=0
+        )
         self.indicator_canvas.pack(side="left", padx=4)
         self._draw_indicator("idle")
 
-        tk.Label(manual_frame, text="|", bg="#eef4ff", fg="#aaa").pack(side="left", padx=6)
+        tk.Label(manual_frame, text="|", bg="#eef4ff", fg="#aaa").pack(
+            side="left", padx=6
+        )
 
         # Undo button
         self.undo_btn = tk.Button(
-            manual_frame, text="↩ Undo", bg="#c0392b", fg="white",
+            manual_frame,
+            text="↩ Undo",
+            bg="#c0392b",
+            fg="white",
             font=("Segoe UI", 9, "bold"),
-            state="disabled", command=self._undo_last
+            state="disabled",
+            command=self._undo_last,
         )
         self.undo_btn.pack(side="left", padx=4)
-
         self.undo_info_label = tk.Label(
-            manual_frame, text="", font=("Segoe UI", 8), bg="#eef4ff", fg="#888"
+            manual_frame,
+            text="",
+            font=("Segoe UI", 8),
+            bg="#eef4ff",
+            fg="#888",
         )
         self.undo_info_label.pack(side="left", padx=4)
 
@@ -345,30 +469,47 @@ class OCRScannerApp:
         last_update_frame = tk.Frame(self.root, bg="#1a1a2e", pady=6)
         last_update_frame.pack(fill="x", padx=10, pady=(0, 2))
 
-        tk.Label(last_update_frame, text="LAST UPDATE", font=("Segoe UI", 9, "bold"),
-                 bg="#1a1a2e", fg="#7faaff").pack(side="left", padx=(12, 6))
-
+        tk.Label(
+            last_update_frame,
+            text="LAST UPDATE",
+            font=("Segoe UI", 9, "bold"),
+            bg="#1a1a2e",
+            fg="#7faaff",
+        ).pack(side="left", padx=(12, 6))
         self.last_update_label = tk.Label(
-            last_update_frame, text="—  รอการอัปเดต",
-            font=("Segoe UI", 16, "bold"), bg="#1a1a2e", fg="#ffffff", anchor="w"
+            last_update_frame,
+            text="—  รอการอัปเดต",
+            font=("Segoe UI", 16, "bold"),
+            bg="#1a1a2e",
+            fg="#ffffff",
+            anchor="w",
         )
         self.last_update_label.pack(side="left", padx=4, fill="x", expand=True)
 
         self.last_update_time_label = tk.Label(
-            last_update_frame, text="",
-            font=("Segoe UI", 10), bg="#1a1a2e", fg="#aaaaaa", anchor="e"
+            last_update_frame,
+            text="",
+            font=("Segoe UI", 10),
+            bg="#1a1a2e",
+            fg="#aaaaaa",
+            anchor="e",
         )
         self.last_update_time_label.pack(side="right", padx=12)
 
         # Canvas
         self.canvas = tk.Canvas(self.root, bg="black", cursor="crosshair")
         self.canvas.pack(fill="both", expand=True, padx=10, pady=4)
-        self.canvas.bind("<ButtonPress-1>",   self._on_mouse_press)
-        self.canvas.bind("<B1-Motion>",       self._on_mouse_drag)
+        self.canvas.bind("<ButtonPress-1>", self._on_mouse_press)
+        self.canvas.bind("<B1-Motion>", self._on_mouse_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_mouse_release)
-        self.canvas.bind("<MouseWheel>",      self._on_mousewheel)
-        self.canvas.create_text(400, 200, text="ยังไม่ได้เชื่อมต่อ",
-                                fill="white", font=("Segoe UI", 14))
+        self.canvas.bind("<MouseWheel>", self._on_mousewheel)
+        self.canvas.create_text(
+            400,
+            200,
+            text="ยังไม่ได้เชื่อมต่อ",
+            fill="white",
+            font=("Segoe UI", 14),
+        )
 
         # Bottom
         bottom = tk.Frame(self.root)
@@ -376,35 +517,39 @@ class OCRScannerApp:
         left_b = tk.Frame(bottom)
         left_b.pack(side="left", fill="both", expand=True, padx=(0, 6))
         tk.Label(left_b, text="📝 ผลลัพธ์ OCR:").pack(anchor="w")
-        self.result_text = scrolledtext.ScrolledText(left_b, height=6,
-                                                     font=("TH Sarabun New", 12))
+        self.result_text = scrolledtext.ScrolledText(
+            left_b, height=6, font=("TH Sarabun New", 12)
+        )
         self.result_text.pack(fill="both", expand=True)
         right_b = tk.Frame(bottom, width=440)
         right_b.pack(side="left", fill="y")
         right_b.pack_propagate(False)
         tk.Label(right_b, text="📊 ผลลัพธ์ Google Sheet:").pack(anchor="w")
-        self.sheet_result = scrolledtext.ScrolledText(right_b, height=6,
-                                                      font=("TH Sarabun New", 12),
-                                                      bg="#f0fff0")
+        self.sheet_result = scrolledtext.ScrolledText(
+            right_b, height=6, font=("TH Sarabun New", 12), bg="#f0fff0"
+        )
         self.sheet_result.pack(fill="both", expand=True)
 
-        self.status = tk.Label(self.root, text="พร้อมใช้งาน", fg="green", anchor="w")
+        self.status = tk.Label(
+            self.root, text="พร้อมใช้งาน", fg="green", anchor="w"
+        )
         self.status.pack(fill="x", padx=10, pady=(0, 4))
 
     # ─────────────────────────── INDICATOR ───────────────────────────
     def _draw_indicator(self, state, visible=True):
         self.indicator_canvas.delete("all")
         colors = {
-            "idle":    ("#cccccc", "#999999"),
+            "idle": ("#cccccc", "#999999"),
             "success": ("#00cc44", "#008833"),
-            "error":   ("#ff3333", "#cc0000"),
+            "error": ("#ff3333", "#cc0000"),
         }
         fill, outline = colors.get(state, colors["idle"])
         if not visible and state != "idle":
             fill = "#eef4ff"
             outline = "#eef4ff"
-        self.indicator_canvas.create_oval(4, 4, 24, 24, fill=fill,
-                                          outline=outline, width=2)
+        self.indicator_canvas.create_oval(
+            4, 4, 24, 24, fill=fill, outline=outline, width=2
+        )
 
     def _start_blink(self, state):
         self._indicator_state = state
@@ -421,7 +566,9 @@ class OCRScannerApp:
             return
         self._draw_indicator(state, visible=on)
         self._blink_count += 1
-        self._blink_job = self.root.after(300, lambda: self._blink_cycle(state, not on))
+        self._blink_job = self.root.after(
+            300, lambda: self._blink_cycle(state, not on)
+        )
 
     def _set_indicator_success(self, codes, action="อัปเดต"):
         ts = datetime.datetime.now().strftime("%H:%M:%S")
@@ -448,11 +595,15 @@ class OCRScannerApp:
 
     def _on_manual_code_enter(self, event=None):
         code = self.manual_code_entry.get().strip()
-        if not re.fullmatch(r"\d{4}", code):
-            messagebox.showwarning("รหัสไม่ถูกต้อง", "กรุณาพิมพ์ตัวเลข 4 หลัก เช่น 1234")
+        if not re.fullmatch(r"\d{1,4}", code):
+            messagebox.showwarning(
+                "รหัสไม่ถูกต้อง", "กรุณาพิมพ์ตัวเลข 1-4 หลัก เช่น 5, 23, 1234"
+            )
             return
         if not self.gs.connected:
-            messagebox.showwarning("ยังไม่ได้เชื่อมต่อ", "กรุณาเชื่อมต่อ Google Sheet ก่อน")
+            messagebox.showwarning(
+                "ยังไม่ได้เชื่อมต่อ", "กรุณาเชื่อมต่อ Google Sheet ก่อน"
+            )
             self._set_indicator_error()
             return
         threading.Thread(
@@ -468,44 +619,71 @@ class OCRScannerApp:
         found, row_idx, current_status = self.gs.lookup(code)
         if not found:
             line = f"\n[{ts}] ✏️ Manual\n❌ รหัส {code} → ไม่พบใน Sheet\n"
-            self.root.after(0, lambda: self.sheet_result.insert("end", line, "notfound"))
+            self.root.after(
+                0, lambda: self.sheet_result.insert("end", line, "notfound")
+            )
             self.root.after(0, lambda: self.sheet_result.see("end"))
             self.root.after(0, self._set_indicator_error)
             return
 
-        current_base = re.sub(r'\s*\((Auto|Manual)\)\s*$', '', current_status).strip()
+        current_base = re.sub(
+            r"\s*\((Auto|Manual)\)\s*$", "", current_status
+        ).strip()
         if current_base == base_status.strip():
             line = f"\n[{ts}] ✏️ Manual\nℹ️ รหัส {code} มีสถานะ '{current_status}' อยู่แล้ว\n"
-            self.root.after(0, lambda: self.sheet_result.insert("end", line, "skip"))
+            self.root.after(
+                0, lambda: self.sheet_result.insert("end", line, "skip")
+            )
             self.root.after(0, lambda: self.sheet_result.see("end"))
-            self.root.after(0, lambda: self._set_indicator_error(f"รหัส {code} มีสถานะนี้อยู่แล้ว"))
+            self.root.after(
+                0,
+                lambda: self._set_indicator_error(
+                    f"รหัส {code} มีสถานะนี้อยู่แล้ว"
+                ),
+            )
             return
 
-        ok, update_msg = self.gs.update_status(row_idx, new_status, color, timestamp=ts, source="Manual")
+        ok, update_msg = self.gs.update_status(
+            row_idx, new_status, color, timestamp=ts, source="Manual"
+        )
         if ok:
-            self._undo_stack.append({
-                "code": code,
-                "row_idx": row_idx,
-                "old_status": current_status,
-                "new_status": new_status,
-                "old_color": self._status_to_color(current_status),
-            })
+            self._undo_stack.append(
+                {
+                    "code": code,
+                    "row_idx": row_idx,
+                    "old_status": current_status,
+                    "new_status": new_status,
+                    "old_color": self._status_to_color(current_status),
+                }
+            )
             line = f"\n[{ts}] ✏️ Manual\n✅ รหัส {code} (แถว {row_idx})\n   {current_status} → {new_status}\n"
-            self.root.after(0, lambda: self.sheet_result.insert("end", line, "updated"))
+            self.root.after(
+                0, lambda: self.sheet_result.insert("end", line, "updated")
+            )
             self.root.after(0, lambda: self.sheet_result.see("end"))
             self.root.after(0, lambda: self._set_indicator_success([code]))
             self.root.after(0, self._update_undo_ui)
             self.root.after(0, lambda: self.manual_code_entry.delete(0, "end"))
         else:
             line = f"\n[{ts}] ✏️ Manual\n⚠️ รหัส {code} อัปเดตไม่สำเร็จ: {update_msg}\n"
-            self.root.after(0, lambda: self.sheet_result.insert("end", line, "warn"))
+            self.root.after(
+                0, lambda: self.sheet_result.insert("end", line, "warn")
+            )
             self.root.after(0, lambda: self.sheet_result.see("end"))
             self.root.after(0, self._set_indicator_error)
 
-        self.root.after(0, lambda: self.sheet_result.tag_config("updated", foreground="#1a7340"))
-        self.root.after(0, lambda: self.sheet_result.tag_config("skip", foreground="#0055cc"))
-        self.root.after(0, lambda: self.sheet_result.tag_config("warn", foreground="orange"))
-        self.root.after(0, lambda: self.sheet_result.tag_config("notfound", foreground="red"))
+        self.root.after(
+            0, lambda: self.sheet_result.tag_config("updated", foreground="#1a7340")
+        )
+        self.root.after(
+            0, lambda: self.sheet_result.tag_config("skip", foreground="#0055cc")
+        )
+        self.root.after(
+            0, lambda: self.sheet_result.tag_config("warn", foreground="orange")
+        )
+        self.root.after(
+            0, lambda: self.sheet_result.tag_config("notfound", foreground="red")
+        )
 
     def _status_to_color(self, status_text):
         return STATUS_COLORS.get(status_text, STATUS_COLORS["_custom"])
@@ -526,10 +704,14 @@ class OCRScannerApp:
         if not self._undo_stack:
             return
         if not self.gs.connected:
-            messagebox.showwarning("ยังไม่ได้เชื่อมต่อ", "กรุณาเชื่อมต่อ Google Sheet ก่อน")
+            messagebox.showwarning(
+                "ยังไม่ได้เชื่อมต่อ", "กรุณาเชื่อมต่อ Google Sheet ก่อน"
+            )
             return
         entry = self._undo_stack[-1]
-        threading.Thread(target=self._undo_worker, args=(entry,), daemon=True).start()
+        threading.Thread(
+            target=self._undo_worker, args=(entry,), daemon=True
+        ).start()
 
     def _undo_worker(self, entry):
         ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -541,20 +723,35 @@ class OCRScannerApp:
             self._undo_stack.pop()
             self.auto_capture = False
             self.auto_var.set(False)
-            line = (f"\n[{ts}] ↩ Undo\n"
-                    f"✅ รหัส {entry['code']} (แถว {entry['row_idx']})\n"
-                    f"   {entry['new_status']} → {entry['old_status']} (ย้อนกลับ)\n")
-            self.root.after(0, lambda: self.sheet_result.insert("end", line, "updated"))
+            line = (
+                f"\n[{ts}] ↩ Undo\n"
+                f"✅ รหัส {entry['code']} (แถว {entry['row_idx']})\n"
+                f"   {entry['new_status']} → {entry['old_status']} (ย้อนกลับ)\n"
+            )
+            self.root.after(
+                0, lambda: self.sheet_result.insert("end", line, "updated")
+            )
             self.root.after(0, lambda: self.sheet_result.see("end"))
-            self.root.after(0, lambda: self._set_indicator_success([entry["code"]], action="ย้อนกลับ"))
+            self.root.after(
+                0,
+                lambda: self._set_indicator_success(
+                    [entry["code"]], action="ย้อนกลับ"
+                ),
+            )
             self.root.after(0, self._update_undo_ui)
         else:
             line = f"\n[{ts}] ↩ Undo ล้มเหลว: {msg}\n"
-            self.root.after(0, lambda: self.sheet_result.insert("end", line, "warn"))
+            self.root.after(
+                0, lambda: self.sheet_result.insert("end", line, "warn")
+            )
             self.root.after(0, lambda: self.sheet_result.see("end"))
             self.root.after(0, self._set_indicator_error)
-        self.root.after(0, lambda: self.sheet_result.tag_config("updated", foreground="#1a7340"))
-        self.root.after(0, lambda: self.sheet_result.tag_config("warn", foreground="orange"))
+        self.root.after(
+            0, lambda: self.sheet_result.tag_config("updated", foreground="#1a7340")
+        )
+        self.root.after(
+            0, lambda: self.sheet_result.tag_config("warn", foreground="orange")
+        )
 
     # ─────────────────────────── RELOAD ───────────────────────────
     def reload_app(self):
@@ -598,8 +795,13 @@ class OCRScannerApp:
             self._blink_job = None
 
         self.canvas.delete("all")
-        self.canvas.create_text(400, 200, text="🔄 รีโหลดแล้ว กรุณาเริ่มสตรีมใหม่",
-                                fill="white", font=("Segoe UI", 14))
+        self.canvas.create_text(
+            400,
+            200,
+            text="🔄 รีโหลดแล้ว กรุณาเริ่มสตรีมใหม่",
+            fill="white",
+            font=("Segoe UI", 14),
+        )
 
         self.status.config(text="🔄 รีโหลดเสร็จสิ้น กำลังค้นหากล้อง...")
         self.root.after(500, self._scan_cameras)
@@ -629,7 +831,11 @@ class OCRScannerApp:
         selected = self.status_var.get()
         if selected == "พิมพ์เอง...":
             custom = self.custom_status_entry.get().strip()
-            return custom if custom and custom != "พิมพ์สถานะที่ต้องการ..." else "ปักเสร็จแล้ว"
+            return (
+                custom
+                if custom and custom != "พิมพ์สถานะที่ต้องการ..."
+                else "ปักเสร็จแล้ว"
+            )
         return selected
 
     def _get_current_color(self):
@@ -640,11 +846,15 @@ class OCRScannerApp:
 
     # ─────────────────────────── ZOOM & PAN ───────────────────────────
     def _zoom_in(self):
-        self.zoom_level = min(self.zoom_max, round(self.zoom_level + self.zoom_step, 2))
+        self.zoom_level = min(
+            self.zoom_max, round(self.zoom_level + self.zoom_step, 2)
+        )
         self.zoom_label.config(text=f"{self.zoom_level:.1f}x")
 
     def _zoom_out(self):
-        self.zoom_level = max(self.zoom_min, round(self.zoom_level - self.zoom_step, 2))
+        self.zoom_level = max(
+            self.zoom_min, round(self.zoom_level - self.zoom_step, 2)
+        )
         self.zoom_label.config(text=f"{self.zoom_level:.1f}x")
         if self.zoom_level == self.zoom_min:
             self.zoom_offset_x = 0.5
@@ -705,8 +915,10 @@ class OCRScannerApp:
             x2 = max(self.drag_start[0], e.x / cw)
             y2 = max(self.drag_start[1], e.y / ch)
             self.crop = {
-                "x1": max(0, x1), "y1": max(0, y1),
-                "x2": min(1, x2), "y2": min(1, y2)
+                "x1": max(0, x1),
+                "y1": max(0, y1),
+                "x2": min(1, x2),
+                "y2": min(1, y2),
             }
 
     def _on_mouse_release(self, e):
@@ -739,7 +951,9 @@ class OCRScannerApp:
             self.sheet_result.see("end")
             return
         base_status = self._get_current_status()
-        new_status = f"{base_status} (Auto)" if source == "auto" else base_status
+        new_status = (
+            f"{base_status} (Auto)" if source == "auto" else base_status
+        )
         color = self._get_current_color()
         ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.sheet_result.insert("end", f"\n[{ts}] สถานะ: {new_status}\n")
@@ -749,21 +963,33 @@ class OCRScannerApp:
         for code in codes:
             found, row_idx, current_status = self.gs.lookup(code)
             if found:
-                current_base = re.sub(r'\s*\((Auto|Manual)\)\s*$', '', current_status).strip()
+                current_base = re.sub(
+                    r"\s*\((Auto|Manual)\)\s*$", "", current_status
+                ).strip()
                 if current_base == base_status.strip():
                     line = f"ℹ️ รหัส {code} (แถว {row_idx}) มีสถานะ '{current_status}' อยู่แล้ว — ไม่มีการเปลี่ยนแปลง\n"
                     self.sheet_result.insert("end", line, "skip")
                     skipped_codes.append(code)
                 else:
-                    ok, update_msg = self.gs.update_status(row_idx, new_status, color, timestamp=ts, source="Auto")
+                    ok, update_msg = self.gs.update_status(
+                        row_idx,
+                        new_status,
+                        color,
+                        timestamp=ts,
+                        source="Auto",
+                    )
                     if ok:
-                        self._undo_stack.append({
-                            "code": code,
-                            "row_idx": row_idx,
-                            "old_status": current_status,
-                            "new_status": new_status,
-                            "old_color": self._status_to_color(current_status),
-                        })
+                        self._undo_stack.append(
+                            {
+                                "code": code,
+                                "row_idx": row_idx,
+                                "old_status": current_status,
+                                "new_status": new_status,
+                                "old_color": self._status_to_color(
+                                    current_status
+                                ),
+                            }
+                        )
                         line = f"✅ รหัส {code} (แถว {row_idx})\n   {current_status} → {new_status}\n   📅 col G: {ts}\n"
                         self.sheet_result.insert("end", line, "updated")
                         updated_codes.append(code)
@@ -775,16 +1001,19 @@ class OCRScannerApp:
                 line = f"❌ รหัส {code} → ไม่พบใน Sheet\n"
                 self.sheet_result.insert("end", line, "notfound")
                 any_error = True
-        self.sheet_result.tag_config("updated",  foreground="#1a7340")
-        self.sheet_result.tag_config("skip",     foreground="#0055cc")
-        self.sheet_result.tag_config("warn",     foreground="orange")
+
+        self.sheet_result.tag_config("updated", foreground="#1a7340")
+        self.sheet_result.tag_config("skip", foreground="#0055cc")
+        self.sheet_result.tag_config("warn", foreground="orange")
         self.sheet_result.tag_config("notfound", foreground="red")
         self.sheet_result.see("end")
 
         if updated_codes:
             self._set_indicator_success(updated_codes)
         elif skipped_codes and not any_error:
-            self._set_indicator_error(f"รหัส {', '.join(skipped_codes)} มีสถานะเดิมอยู่แล้ว")
+            self._set_indicator_error(
+                f"รหัส {', '.join(skipped_codes)} มีสถานะเดิมอยู่แล้ว"
+            )
         else:
             self._set_indicator_error()
 
@@ -816,7 +1045,9 @@ class OCRScannerApp:
             self.camera_combo["values"] = labels
             self.camera_combo.current(0)
             self.camera_index = found[0][0]
-            self.status.config(text=f"พบกล้อง {len(found)} ตัว: {', '.join(labels)}")
+            self.status.config(
+                text=f"พบกล้อง {len(found)} ตัว: {', '.join(labels)}"
+            )
         else:
             self.camera_combo["values"] = ["ไม่พบกล้อง"]
             self.camera_combo.current(0)
@@ -854,13 +1085,20 @@ class OCRScannerApp:
             network = ipaddress.IPv4Network(subnet, strict=False)
             hosts = list(network.hosts())
         except Exception:
-            self.root.after(0, lambda: self.scan_progress.config(text="IP range ไม่ถูกต้อง"))
+            self.root.after(
+                0,
+                lambda: self.scan_progress.config(text="IP range ไม่ถูกต้อง"),
+            )
             return
         total = len(hosts)
         for idx, host in enumerate(hosts):
             ip = str(host)
-            self.root.after(0, lambda i=idx, t=total, h=ip:
-                self.scan_progress.config(text=f"สแกน {h} ({i+1}/{t})"))
+            self.root.after(
+                0,
+                lambda i=idx, t=total, h=ip: self.scan_progress.config(
+                    text=f"สแกน {h} ({i+1}/{t})"
+                ),
+            )
             for port in COMMON_PORTS:
                 if not self._port_open(ip, port):
                     continue
@@ -924,11 +1162,19 @@ class OCRScannerApp:
         if self.is_streaming:
             return
         src_type = self.source_type.get()
-        src = self.camera_index if src_type == "Webcam" else self.url_entry.get().strip()
+        src = (
+            self.camera_index
+            if src_type == "Webcam"
+            else self.url_entry.get().strip()
+        )
         if not src and src != 0:
-            messagebox.showwarning("แจ้งเตือน", "กรุณาใส่ URL หรือสแกน LAN ก่อน")
+            messagebox.showwarning(
+                "แจ้งเตือน", "กรุณาใส่ URL หรือสแกน LAN ก่อน"
+            )
             return
-        self.cap = cv2.VideoCapture(src, cv2.CAP_DSHOW if isinstance(src, int) else 0)
+        self.cap = cv2.VideoCapture(
+            src, cv2.CAP_DSHOW if isinstance(src, int) else 0
+        )
         if not self.cap.isOpened():
             messagebox.showerror("Error", f"เปิดกล้องไม่ได้:\n{src}")
             return
@@ -968,8 +1214,15 @@ class OCRScannerApp:
             y2p = int(self.crop["y2"] * dh)
             cv2.rectangle(resized, (x1p, y1p), (x2p, y2p), (0, 255, 0), 2)
             img = ImageTk.PhotoImage(Image.fromarray(resized))
-            self.root.after(0, lambda i=img, w=dw, h=dh, coords=(x1p, y1p, x2p, y2p):
-                            self._show_canvas(i, w, h, coords))
+            self.root.after(
+                0,
+                lambda i=img, w=dw, h=dh, coords=(
+                    x1p,
+                    y1p,
+                    x2p,
+                    y2p,
+                ): self._show_canvas(i, w, h, coords),
+            )
         except Exception:
             pass
 
@@ -978,14 +1231,26 @@ class OCRScannerApp:
         self.canvas.create_image(0, 0, anchor="nw", image=img)
         self.canvas.image = img
         x1p, y1p, x2p, y2p = coords
-        self.canvas.create_rectangle(x1p, y1p, x2p, y2p,
-                                     outline="#00ff00", width=2, dash=(6, 3))
-        self.canvas.create_text(x1p + 4, y1p + 4, anchor="nw", text="OCR Zone",
-                                fill="#00ff00", font=("Segoe UI", 9, "bold"))
+        self.canvas.create_rectangle(
+            x1p, y1p, x2p, y2p, outline="#00ff00", width=2, dash=(6, 3)
+        )
+        self.canvas.create_text(
+            x1p + 4,
+            y1p + 4,
+            anchor="nw",
+            text="OCR Zone",
+            fill="#00ff00",
+            font=("Segoe UI", 9, "bold"),
+        )
         if self.zoom_level > 1.0:
-            self.canvas.create_text(8, 8, anchor="nw",
-                                     text=f"🔍 {self.zoom_level:.1f}x  (Ctrl+ลาก = เลื่อน)",
-                                     fill="yellow", font=("Segoe UI", 10, "bold"))
+            self.canvas.create_text(
+                8,
+                8,
+                anchor="nw",
+                text=f"🔍 {self.zoom_level:.1f}x  (Ctrl+ลาก = เลื่อน)",
+                fill="yellow",
+                font=("Segoe UI", 10, "bold"),
+            )
 
     # ─────────────────────────── OCR ───────────────────────────
     def _crop_frame(self, frame):
@@ -998,12 +1263,16 @@ class OCRScannerApp:
 
     def _preprocess(self, frame):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_LINEAR)
-        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        gray = cv2.resize(
+            gray, None, fx=2, fy=2, interpolation=cv2.INTER_LINEAR
+        )
+        _, thresh = cv2.threshold(
+            gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+        )
         return thresh
 
-    def _extract_4digit_codes(self, text):
-        return list(dict.fromkeys(re.findall(r'\b\d{4}\b', text)))
+    def _extract_codes(self, text):
+        return list(dict.fromkeys(re.findall(r"\b\d{1,4}\b", text)))
 
     def _sort_ocr_result(self, text):
         lines = [l.strip() for l in text.splitlines() if l.strip()]
@@ -1028,17 +1297,23 @@ class OCRScannerApp:
         if self.current_frame is None:
             messagebox.showinfo("แจ้งเตือน", "กรุณาเริ่มสตรีมก่อน")
             return
-        threading.Thread(target=self._do_ocr,
-                         args=(self.current_frame.copy(),), daemon=True).start()
+        threading.Thread(
+            target=self._do_ocr,
+            args=(self.current_frame.copy(),),
+            daemon=True,
+        ).start()
 
     def open_file(self):
-        path = filedialog.askopenfilename(filetypes=[("Images", "*.jpg *.png *.bmp")])
+        path = filedialog.askopenfilename(
+            filetypes=[("Images", "*.jpg *.png *.bmp")]
+        )
         if path:
             frame = cv2.imread(path)
             if frame is not None:
                 self.current_frame = frame
-                threading.Thread(target=self._do_ocr,
-                                 args=(frame.copy(),), daemon=True).start()
+                threading.Thread(
+                    target=self._do_ocr, args=(frame.copy(),), daemon=True
+                ).start()
 
     def _do_ocr(self, frame):
         self.root.after(0, lambda: self.status.config(text="กำลังทำ OCR..."))
@@ -1049,35 +1324,47 @@ class OCRScannerApp:
             text_tha = pytesseract.image_to_string(
                 Image.fromarray(processed),
                 lang="eng",
-                config="--oem 3 --psm 7 -c tessedit_char_whitelist=0123456789"
+                config="--oem 3 --psm 7 -c tessedit_char_whitelist=0123456789",
             )
             sorted_text = self._sort_ocr_result(text_tha)
             ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             output = f"\n{'─'*38}\n[{ts}]\n{sorted_text}\n"
             self.root.after(0, lambda: self.result_text.insert("end", output))
             self.root.after(0, lambda: self.result_text.see("end"))
-            codes = self._extract_4digit_codes(text_tha)
+            codes = self._extract_codes(text_tha)
             if codes:
-                self.root.after(0, lambda c=codes: self._lookup_and_update(c, source="auto"))
+                self.root.after(
+                    0, lambda c=codes: self._lookup_and_update(c, source="auto")
+                )
             else:
-                self.root.after(0, lambda: self.sheet_result.insert(
-                    "end", f"\n[{ts}]\n⚠️ ไม่พบรหัส 4 หลักในภาพ\n"))
+                self.root.after(
+                    0,
+                    lambda: self.sheet_result.insert(
+                        "end", f"\n[{ts}]\n⚠️ ไม่พบรหัส 1-4 หลักในภาพ\n"
+                    ),
+                )
                 self.root.after(0, lambda: self.sheet_result.see("end"))
-            self.root.after(0, lambda: self.status.config(
-                text=f"✅ OCR เสร็จ | รหัส: {codes} | สถานะ: {self._get_current_status()} | Auto: {'เปิด' if self.auto_capture else 'ปิด'}"
-            ))
+            self.root.after(
+                0,
+                lambda: self.status.config(
+                    text=f"✅ OCR เสร็จ | รหัส: {codes} | สถานะ: {self._get_current_status()} | Auto: {'เปิด' if self.auto_capture else 'ปิด'}"
+                ),
+            )
         except Exception as e:
-            self.root.after(0, lambda: self.status.config(text=f"❌ OCR error: {e}"))
+            self.root.after(
+                0, lambda: self.status.config(text=f"❌ OCR error: {e}")
+            )
 
     def save_result(self):
-        path = filedialog.asksaveasfilename(defaultextension=".txt",
-                                           filetypes=[("Text", "*.txt")])
+        path = filedialog.asksaveasfilename(
+            defaultextension=".txt", filetypes=[("Text", "*.txt")]
+        )
         if path:
             content = (
-                "=== OCR Results ===\n" +
-                self.result_text.get("1.0", "end") +
-                "\n=== Sheet Results ===\n" +
-                self.sheet_result.get("1.0", "end")
+                "=== OCR Results ===\n"
+                + self.result_text.get("1.0", "end")
+                + "\n=== Sheet Results ===\n"
+                + self.sheet_result.get("1.0", "end")
             )
             with open(path, "w", encoding="utf-8") as f:
                 f.write(content)
@@ -1091,5 +1378,7 @@ class OCRScannerApp:
 if __name__ == "__main__":
     root = tk.Tk()
     app = OCRScannerApp(root)
-    root.protocol("WM_DELETE_WINDOW", lambda: (app.stop_stream(), root.destroy()))
+    root.protocol(
+        "WM_DELETE_WINDOW", lambda: (app.stop_stream(), root.destroy())
+    )
     root.mainloop()
