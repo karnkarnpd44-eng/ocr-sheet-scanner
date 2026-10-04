@@ -1,0 +1,14 @@
+[2026-10-04 12:40:03] [INFO] [Staff] [APP_START] เริ่มต้นเปิดใช้งานโปรแกรม OCRScannerApp
+[2026-10-04 12:40:03] [INFO] [Staff] [MODEL_INIT] กำลังโหลดโมเดล YOLO & EasyOCR...
+[2026-10-04 12:40:03] [WARNING] Using CPU. Note: This module is much faster with a GPU.
+[2026-10-04 12:40:05] [INFO] [Staff] [MODEL_INIT] โมเดล YOLO & EasyOCR พร้อมทำงานเรียบร้อย
+[2026-10-04 12:40:34] [INFO] [Staff] [STREAM_CONTROL] กดปุ่มเริ่มตรวจจับสด: URL โดยตรง (rtsp://admin:Sitthik0rn@192.168.1.124:10554/tcp/av0_0)
+[2026-10-04 12:40:51] [INFO] [Staff] [USER_ACTION] กดปุ่มเชื่อมต่อ Google Sheet ด้วยไฟล์ 'credentials.json'
+[2026-10-04 12:40:55] [INFO] [Staff] [SHEET_CONNECT] เชื่อมต่อ 'VSearch4.0 [2026]' สำเร็จ (พบ 3454 รหัส)
+[2026-10-04 12:41:12] [INFO] [Staff] [USER_ACTION] พิมพ์รหัสเอง (Manual Entry): 4567
+[2026-10-04 12:41:13] [INFO] [Staff] [SHEET_LOOKUP] ค้นหาไม่พบรหัส: 4567
+[2026-10-04 12:41:13] [INFO] [Staff] [INDICATOR] STATUS_ERROR: ไม่พบรหัส 4567 ใน Sheet
+[2026-10-04 12:41:13] [INFO] [Staff] [STATUS_NOTFOUND] ไม่พบรหัส 4567 ใน Google Sheet
+[2026-10-04 12:41:34] [INFO] [Staff] [USER_ACTION] พิมพ์รหัสเอง (Manual Entry): 3256
+[2026-10-04 12:41:34] [INFO] [Staff] [INDICATOR] STATUS_ERROR: รหัส 3256 มีสถานะนี้อยู่แล้ว
+[2026-10-04 12:41:34] [INFO] [Staff] [UPDATE_SKIP] ข้ามรหัส 3256 เนื่องจากมีสถานะ 'รับข้อมูลเข้าระบบแล้ว' อยู่แล้ว

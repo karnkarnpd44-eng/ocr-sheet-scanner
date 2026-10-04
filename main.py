@@ -124,6 +124,8 @@ class GoogleSheetManager:
                 self.sheet.update_cell(row_index, 9, timestamp)
             bg = color if color else {"red": 0.0, "green": 0.8, "blue": 0.0}
             self.sheet.format(f"A{row_index}:B{row_index}", {"backgroundColor": bg})
+            # อัปเดต cache ท้องถิ่นให้ตรงกันทันที
+            self._refresh_cache()
             return True, f"อัปเดตแถว {row_index} → '{new_status}' แล้ว"
         except Exception as e:
             return False, str(e)
@@ -171,11 +173,10 @@ class OCRScannerApp:
         self._blink_job = None
         self._indicator_state = "idle"
 
-        # ระบบกลไก Double-Check & Cooldown
+        # ตัวแปรควบคุมระบบล็อกเป้าและรีเช็ก
         self.candidate_code = None
         self.candidate_count = 0
-        self.last_processed_code = None
-        self.last_processed_time = 0
+        self.locked_code = None       # ล็อกรหัสที่ประมวลผลเสร็จแล้ว ไม่ให้อ่านซ้ำจนกว่าจะเปลี่ยนถุง
         self.is_verifying = False
 
         # โหลดโมเดล
@@ -258,7 +259,7 @@ class OCRScannerApp:
         self.zoom_label.pack(side="left")
         tk.Button(ctrl, text="➖", width=3, command=self._zoom_out, bg="#ddd").pack(side="left", padx=1)
         tk.Button(ctrl, text="รีเซ็ตซูม", command=self._zoom_reset, bg="#ddd").pack(side="left", padx=4)
-        tk.Label(ctrl, text="| กล้องจะใช้ YOLO ค้นหากรอบตัวเลข 4 หลักอัตโนมัติแบบ Real-time", fg="#0055cc", bg="#f0f0f0", font=("Segoe UI", 9, "bold")).pack(side="left", padx=10)
+        tk.Label(ctrl, text="| ระบบล็อกเป้าอัตโนมัติ (อ่านครั้งเดียว หยุดรอเปลี่ยนถุงผ้า)", fg="#0055cc", bg="#f0f0f0", font=("Segoe UI", 9, "bold")).pack(side="left", padx=10)
 
         # Row 5: Google Sheet
         gs_frame = tk.Frame(self.root, pady=3, bg="#e8f4e8")
@@ -270,9 +271,9 @@ class OCRScannerApp:
         self.cred_path.pack(side="left", padx=2)
         tk.Button(gs_frame, text="📁", command=self._browse_cred).pack(side="left")
         tk.Button(gs_frame, text="🔌 เชื่อมต่อ Sheet", bg="#1a7340", fg="white", command=self._connect_sheet).pack(side="left", padx=6)
-        tk.Label(gs_frame, text="สถานะที่จะอัปเดต:", bg="#e8f4e8", font=("Segoe UI", 9, "bold")).pack(side="left", padx=(8, 2))
+        tk.Label(gs_frame, text="สถานะที่จะอัปเดต:", bg="#e8f4e8", font=("Segoe UI", 15, "bold")).pack(side="left", padx=(8, 2))
         self.status_var = tk.StringVar(value=STATUS_OPTIONS[0])
-        self.status_combo = ttk.Combobox(gs_frame, textvariable=self.status_var, values=STATUS_OPTIONS, width=22, state="readonly")
+        self.status_combo = ttk.Combobox(gs_frame, textvariable=self.status_var, values=STATUS_OPTIONS, width=30, state="readonly")
         self.status_combo.pack(side="left", padx=4)
         self.status_combo.bind("<<ComboboxSelected>>", self._on_status_select)
         self.custom_status_entry = tk.Entry(gs_frame, width=22, fg="#555")
@@ -395,39 +396,46 @@ class OCRScannerApp:
             self.sheet_result.insert("end", "⚠️ ยังไม่ได้เชื่อมต่อ Sheet\n")
             self.sheet_result.see("end")
             return
+        
         base_status = self._get_current_status()
-        new_status = f"{base_status} (Auto)" if source == "Auto" else base_status
+        is_custom_mode = (self.status_var.get() == "พิมพ์เอง...")
+        new_status = f"{base_status} (Auto)" if (source == "Auto" and not is_custom_mode) else base_status
         color = self._get_current_color()
         ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         found, row_idx, current_status = self.gs.lookup(code)
         if found:
-            current_base = re.sub(r"\s*\((Auto|Manual)\)\s*$", "", current_status).strip()
-            if current_base == base_status.strip():
-                line = f"ℹ️ [{ts}] รหัส {code} (แถว {row_idx}) มีสถานะ '{current_status}' อยู่แล้ว\n"
-                self.sheet_result.insert("end", line, "skip")
-                self._set_indicator_error(f"รหัส {code} มีสถานะนี้อยู่แล้ว")
+            # เงื่อนไขเช็คสถานะซ้ำในคอลัมน์ B (ยกเว้นโหมด พิมพ์เอง...)
+            if not is_custom_mode:
+                current_base = re.sub(r"\s*\((Auto|Manual)\)\s*$", "", current_status).strip()
+                if current_base == base_status.strip():
+                    line = f"ℹ️ [{ts}] รหัส {code} มีสถานะ '{current_status}' อยู่แล้ว → ข้ามการอัปเดตซ้ำ\n"
+                    self.sheet_result.insert("end", line, "skip")
+                    self.sheet_result.tag_config("skip", foreground="#0055cc")
+                    self.sheet_result.see("end")
+                    self._set_indicator_error(f"รหัส {code} มีสถานะนี้อยู่แล้ว")
+                    return
+
+            # ถ้าสถานะยังไม่ตรง ให้ทำการอัปเดต
+            ok, update_msg = self.gs.update_status(row_idx, new_status, color, timestamp=ts, source=source)
+            if ok:
+                threading.Thread(target=self.gs.notify_line_customer, args=(row_idx, code, new_status), daemon=True).start()
+                self._undo_stack.append({
+                    "code": code, "row_idx": row_idx, "old_status": current_status,
+                    "new_status": new_status, "old_color": self._status_to_color(current_status)
+                })
+                line = f"✅ [{ts}] รหัส {code} (แถว {row_idx})\n   {current_status} → {new_status}\n"
+                self.sheet_result.insert("end", line, "updated")
+                self._set_indicator_success(code)
+                self._update_undo_ui()
             else:
-                ok, update_msg = self.gs.update_status(row_idx, new_status, color, timestamp=ts, source=source)
-                if ok:
-                    threading.Thread(target=self.gs.notify_line_customer, args=(row_idx, code, new_status), daemon=True).start()
-                    self._undo_stack.append({
-                        "code": code, "row_idx": row_idx, "old_status": current_status,
-                        "new_status": new_status, "old_color": self._status_to_color(current_status)
-                    })
-                    line = f"✅ [{ts}] รหัส {code} (แถว {row_idx})\n   {current_status} → {new_status}\n"
-                    self.sheet_result.insert("end", line, "updated")
-                    self._set_indicator_success(code)
-                    self._update_undo_ui()
-                else:
-                    self.sheet_result.insert("end", f"⚠️ รหัส {code} อัปเดตไม่ได้: {update_msg}\n", "warn")
-                    self._set_indicator_error()
+                self.sheet_result.insert("end", f"⚠️ รหัส {code} อัปเดตไม่ได้: {update_msg}\n", "warn")
+                self._set_indicator_error()
         else:
             self.sheet_result.insert("end", f"❌ [{ts}] รหัส {code} → ไม่พบในตาราง Sheet\n", "notfound")
             self._set_indicator_error(f"ไม่พบรหัส {code} ใน Sheet")
 
         self.sheet_result.tag_config("updated", foreground="#1a7340")
-        self.sheet_result.tag_config("skip", foreground="#0055cc")
         self.sheet_result.tag_config("warn", foreground="orange")
         self.sheet_result.tag_config("notfound", foreground="red")
         self.sheet_result.see("end")
@@ -467,7 +475,7 @@ class OCRScannerApp:
             h, w = frame.shape[:2]
             frame_counter += 1
 
-            # วิ่ง YOLO ทุกๆ 3 เฟรมเพื่อความลื่นไหล
+            # วิ่ง YOLO ทุกๆ 3 เฟรม
             if self.yolo_model is not None and frame_counter % 3 == 0:
                 results = self.yolo_model(frame, conf=0.35, verbose=False)
                 new_boxes = []
@@ -477,7 +485,7 @@ class OCRScannerApp:
                         new_boxes.append((bx1, by1, bx2, by2))
                 detected_boxes = new_boxes
 
-                # ถ้าเจอกรอบตัวเลข ส่งไปตรวจสอบ OCR แบบ Double-Check
+                # ถ้าเจอวัตถุ และยังไม่ได้ล็อกรหัสนี้ ค่อยส่งไปตรวจ OCR Double-Check
                 if detected_boxes and not self.is_verifying:
                     bx1, by1, bx2, by2 = detected_boxes[0]
                     pad = 8
@@ -490,12 +498,15 @@ class OCRScannerApp:
                     if crop_target.size > 0:
                         threading.Thread(target=self._verify_and_process, args=(crop_target,), daemon=True).start()
 
-            # วาดกรอบสี่เหลี่ยมวิ่งตามตำแหน่งตัวเลขบนถุงผ้าสดๆ
+            # วาดกรอบสี่เหลี่ยมบนหน้าจอ
             for (bx1, by1, bx2, by2) in detected_boxes:
-                cv2.rectangle(display_frame, (bx1, by1), (bx2, by2), (0, 255, 0), 3)
-                label = f"Target: {self.candidate_code if self.candidate_code else 'Detecting...'}"
-                cv2.putText(display_frame, label, (bx1, max(25, by1 - 10)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                # ถ้าล็อกรหัสนี้ไปแล้ว กรอบจะเป็นสีฟ้า (แสดงว่าประมวลผลเสร็จแล้ว รอเปลี่ยนถุง)
+                box_color = (255, 0, 0) if self.locked_code else (0, 255, 0)
+                cv2.rectangle(display_frame, (bx1, by1), (bx2, by2), box_color, 3)
+                
+                label_text = f"Locked: {self.locked_code}" if self.locked_code else f"Detect: {self.candidate_code if self.candidate_code else 'Scanning...'}"
+                cv2.putText(display_frame, label_text, (bx1, max(25, by1 - 10)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, box_color, 2)
 
             self._update_canvas(display_frame)
             time.sleep(0.01)
@@ -503,18 +514,25 @@ class OCRScannerApp:
     def _verify_and_process(self, crop_img):
         self.is_verifying = True
         try:
-            # ให้อ่านเฉพาะตัวเลข 0-9
             ocr_res = self.reader.readtext(crop_img, allowlist='0123456789')
             found_4digit = None
             for _, text, prob in ocr_res:
                 clean = text.strip()
-                # ต้องเป็นตัวเลข 4 หลักเป๊ะๆ เท่านั้น
                 if re.fullmatch(r'\d{4}', clean) and prob > 0.4:
                     found_4digit = clean
                     break
 
             if found_4digit:
-                # ตรวจสอบว่าตรงกับรอบก่อนหน้าหรือไม่ (Double Check 2 รอบ)
+                # ถ้าเจอรหัสนี้ตรงกับรหัสที่ล็อกไว้ก่อนหน้า ให้ข้ามการอ่านไปเลย (จนกว่าจะเอาถุงออก)
+                if found_4digit == self.locked_code:
+                    self.is_verifying = False
+                    return
+
+                # รีเซ็ตตัวล็อกถ้าเปลี่ยนไปเจอถุงใหม่
+                if self.locked_code and found_4digit != self.locked_code:
+                    self.locked_code = None
+
+                # ระบบรีเช็ก Double-Check 2 รอบ
                 if self.candidate_code == found_4digit:
                     self.candidate_count += 1
                 else:
@@ -525,17 +543,14 @@ class OCRScannerApp:
                 self.root.after(0, lambda: self.result_text.insert("end", log))
                 self.root.after(0, lambda: self.result_text.see("end"))
 
-                # ถ้าอ่านตรงกันครบ 2 รอบ และไม่อยู่ในช่วง Cooldown 6 วินาที
+                # คอนเฟิร์มครบ 2 รอบ
                 if self.candidate_count >= 2:
-                    curr_time = time.time()
-                    if (found_4digit != self.last_processed_code) or (curr_time - self.last_processed_time > 6):
-                        self.last_processed_code = found_4digit
-                        self.last_processed_time = curr_time
-                        
-                        confirm_log = f"🎯 [CONFIRMED] ยืนยันรหัส {found_4digit} ถูกต้องครบ 2 รอบ → ส่งอัปเดต Sheet!\n{'-'*40}\n"
-                        self.root.after(0, lambda: self.result_text.insert("end", confirm_log))
-                        self.root.after(0, lambda: self.result_text.see("end"))
-                        self.root.after(0, lambda c=found_4digit: self._lookup_and_update(c, source="Auto"))
+                    self.locked_code = found_4digit  # ล็อกรหัสนี้ทันทีเพื่อหยุดอ่านซ้ำ
+                    
+                    confirm_log = f"🎯 [CONFIRMED] ยืนยันรหัส {found_4digit} ครบ 2 รอบ → ตรวจสอบสถานะและอัปเดต Sheet!\n{'-'*40}\n"
+                    self.root.after(0, lambda: self.result_text.insert("end", confirm_log))
+                    self.root.after(0, lambda: self.result_text.see("end"))
+                    self.root.after(0, lambda c=found_4digit: self._lookup_and_update(c, source="Auto"))
 
                     self.candidate_code = None
                     self.candidate_count = 0
@@ -646,7 +661,7 @@ class OCRScannerApp:
         selected = self.status_var.get()
         if selected == "พิมพ์เอง...":
             custom = self.custom_status_entry.get().strip()
-            return custom if custom and custom != "พิมพ์สถานะที่ต้องการ..." else ""
+            return custom if custom and custom != "พิมพ์สถานะที่ต้องการ..." else "ปักเสร็จแล้ว"
         return selected
 
     def _get_current_color(self):
@@ -735,6 +750,7 @@ class OCRScannerApp:
         self.sheet_result.delete("1.0", "end")
         self.candidate_code = None
         self.candidate_count = 0
+        self.locked_code = None
         self.status.config(text="รีโหลดเรียบร้อย พร้อมตรวจจับใหม่")
 
     def save_result(self):
